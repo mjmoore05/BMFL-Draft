@@ -289,6 +289,8 @@
         <button id="btnJSON"><span class="mi">&#123;&#125;</span>Export JSON &mdash; full state</button>
         <button id="btnCSV"><span class="mi">&#9776;</span>Export picks CSV</button>
         <button id="btnRosters"><span class="mi">&#9783;</span>Export rosters CSV</button>
+        <hr>
+        <button id="btnAuto"><span class="mi">&#8681;</span>Auto-backup: <b id="autoLbl">off</b></button>
       </div>
     </span>
   </div>
@@ -494,6 +496,7 @@ var picks=[], players=[];
 var sel=null, bidOwner=null, posFilter='ALL', query='', freePos='RB';
 var confirmId=null, expanded=null, snapIdx=0, lastExport=0, nagDismissed=0;
 var kbIdx=-1;          /* highlighted row in the pool, keyboard only */
+var lastAuto=-1;       /* pick count of the last automatic backup */
 var editId=null;       /* pick currently being edited in the log */
 var pendingRestore=null;  /* a sync/JSON load waiting on confirmation */
 
@@ -681,6 +684,25 @@ function setSave(status){
    fast entry with async storage. Superseded writes are skipped rather than
    queued, so the newest state always wins and always lands last. */
 var writeChain=Promise.resolve(), writeSeq=0;
+/* Drop a real file into Downloads every N picks. Browser storage can be
+   cleared, evicted or lost with a profile; a file on disk cannot. Off by
+   default because Chrome asks permission the first time a page downloads
+   more than once. */
+function maybeAutoBackup(){
+  var n=Number(config.autoBackup)||0;
+  if(!n||!picks.length) return;
+  if(picks.length%n!==0) return;
+  if(lastAuto===picks.length) return;      /* never twice for the same count */
+  lastAuto=picks.length;
+  try{
+    var pad=String(picks.length); while(pad.length<3) pad='0'+pad;
+    dl('bmfl-autosave-'+pad+'.json',
+       JSON.stringify({version:1,savedAt:new Date().toISOString(),
+                       config:config,picks:picks},null,2),'application/json');
+    flash('ok','Auto-backup saved: pick '+picks.length+'.');
+  }catch(e){ flash('warn','Auto-backup could not download. Export manually.'); }
+}
+
 function persist(){
   var payload=JSON.stringify({version:1,savedAt:new Date().toISOString(),config:config,picks:picks});
   var mine=++writeSeq, n=picks.length;
@@ -694,7 +716,7 @@ function persist(){
         return store.set(SNAP+((n/5)%SNAPN),payload).catch(function(){});
       }
     }).then(function(){
-      setSave('saved'); banner('savefail',null);
+      setSave('saved'); banner('savefail',null); maybeAutoBackup();
     });
   }).catch(function(e){
     setSave('failed');
@@ -1071,6 +1093,18 @@ $('restoreText').oninput=function(){
 $('price').oninput=updateHint;
 $('price').onkeydown=function(e){if(e.key==='Enter')recordPick();};
 $('record').onclick=recordPick;
+function autoLabel(){
+  var n=Number(config.autoBackup)||0;
+  var el=$('autoLbl'); if(el) el.textContent=n?('every '+n+' picks'):'off';
+}
+$('btnAuto').onclick=function(){
+  var seq=[0,5,10,20], i=seq.indexOf(Number(config.autoBackup)||0);
+  config.autoBackup=seq[(i+1)%seq.length];
+  lastAuto=-1; autoLabel(); persist();
+  flash('ok', config.autoBackup
+    ? 'Auto-backup on — a file every '+config.autoBackup+' picks. Allow multiple downloads if Chrome asks.'
+    : 'Auto-backup off.');
+};
 $('btnJSON').onclick=exportJSON;
 $('btnCSV').onclick=exportCSV;
 $('btnRosters').onclick=exportRosters;
@@ -1252,6 +1286,7 @@ document.addEventListener('keydown',function(e){
     if(!players.length){ players=builtinPlayers(); playerSrc='built-in'; }
     $('leagueName').textContent=config.leagueName;
     nagDismissed=picks.length;
+    autoLabel();
     renderAll(); setSave(picks.length?'saved':'idle');
   });
 })();
